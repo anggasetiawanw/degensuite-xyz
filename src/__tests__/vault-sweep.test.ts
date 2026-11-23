@@ -17,12 +17,15 @@ import {
   TOKEN_PROGRAM_ID,
 } from "../lib/solana/constants";
 import {
+  LIGHTHOUSE_MAX_SAFE_TX_BYTES,
   NonZeroBalanceError,
   UnsafeBurnError,
   buildVaultSweepTransactions,
   calculateFeeSplit,
+  signAndSendUnsignedTransaction,
   simulateVaultSweepTransactions,
   type FlatSweepAccountInput,
+  type PhantomProviderLike,
 } from "../lib/solana/tx-builder/vault-sweep";
 import { buildWalletGuardRevokeTransactions } from "../lib/solana/tx-builder/wallet-guard";
 
@@ -309,5 +312,69 @@ describe("VaultSweep Transaction Builder & Safety Guards", () => {
     expect(result.totalRevokedAccounts).toBe(18);
     expect(result.skippedAccounts).toHaveLength(1);
     expect(result.skippedAccounts[0]?.equals(PublicKey.default)).toBe(false);
+  });
+
+  it("9. Lighthouse Guard Headroom & Unsigned signAndSendTransaction Test: Full 15-account batch stays <= 1050 bytes and strips pre-existing signatures", async () => {
+    const recentBlockhash = Keypair.generate().publicKey.toBase58();
+    const fullBatchAccounts = Array.from({ length: 15 }, () =>
+      createDummyZeroAccount()
+    );
+
+    const { transactions } = buildVaultSweepTransactions({
+      userPublicKey: TEST_USER_PUBKEY,
+      treasuryPublicKey: TEST_TREASURY_PUBKEY,
+      accounts: fullBatchAccounts,
+      recentBlockhash,
+    });
+
+    expect(transactions).toHaveLength(1);
+    const tx = transactions[0]!;
+    const serializedLen = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).length;
+    expect(serializedLen).toBeLessThanOrEqual(LIGHTHOUSE_MAX_SAFE_TX_BYTES);
+
+    const mockConn = {} as unknown as Connection;
+    tx.signatures = [
+      { publicKey: TEST_USER_PUBKEY, signature: Buffer.alloc(64, 1) },
+    ];
+
+    const phantomProvider: PhantomProviderLike = {
+      isPhantom: true,
+      publicKey: TEST_USER_PUBKEY,
+      signAndSendTransaction: vi.fn(async (submittedTx) => {
+        expect(submittedTx.signatures).toHaveLength(0);
+        return { signature: "phantom_sig_123" };
+      }),
+    };
+    const sendTransactionMock = vi.fn().mockResolvedValue("adapter_sig_456");
+
+    const phantomSig = await signAndSendUnsignedTransaction({
+      transaction: tx,
+      connection: mockConn,
+      userPublicKey: TEST_USER_PUBKEY,
+      recentBlockhash,
+      phantomProvider,
+      sendTransaction: sendTransactionMock,
+    });
+    expect(phantomSig).toBe("phantom_sig_123");
+    expect(phantomProvider.signAndSendTransaction).toHaveBeenCalledTimes(1);
+    expect(sendTransactionMock).not.toHaveBeenCalled();
+
+    tx.signatures = [
+      { publicKey: TEST_USER_PUBKEY, signature: Buffer.alloc(64, 2) },
+    ];
+    const adapterSig = await signAndSendUnsignedTransaction({
+      transaction: tx,
+      connection: mockConn,
+      userPublicKey: TEST_USER_PUBKEY,
+      recentBlockhash,
+      phantomProvider: null,
+      sendTransaction: sendTransactionMock,
+    });
+    expect(adapterSig).toBe("adapter_sig_456");
+    expect(sendTransactionMock).toHaveBeenCalledTimes(1);
+    expect(tx.signatures).toHaveLength(0);
   });
 });

@@ -71,8 +71,9 @@ Transactions pack at most **15 token accounts per transaction** so serialized pa
   - Any token with unknown or unverified USD pricing (`verifiedUsdValue === null` or `undefined`)
   - Any batch where `userConfirmedDustBurn !== true`
 
-### 3.5 Mandatory Pre-Flight Simulation
-Both [`simulateVaultSweepTransactions`](src/lib/solana/tx-builder/vault-sweep.ts) and [`simulateWalletGuardTransactions`](src/lib/solana/tx-builder/wallet-guard.ts) execute `await connection.simulateTransaction(tx)` prior to invoking wallet signing (`signTransaction` / `signAllTransactions`). Any non-null `simulation.value.err` aborts the signing flow immediately.
+### 3.5 Mandatory Pre-Flight Simulation & Unsigned `signAndSendTransaction` (Lighthouse Compatible)
+- **Pre-Flight Simulation:** Both [`simulateVaultSweepTransactions`](src/lib/solana/tx-builder/vault-sweep.ts) and [`simulateWalletGuardTransactions`](src/lib/solana/tx-builder/wallet-guard.ts) execute `await connection.simulateTransaction(tx)` prior to invoking wallet signing. Any non-null `simulation.value.err` aborts the flow immediately.
+- **Exclusive Unsigned `signAndSendTransaction` Flow:** [`signAndSendUnsignedTransaction`](src/lib/solana/tx-builder/vault-sweep.ts) strips any placeholder signature entries (`tx.signatures = []`) and submits unsigned transactions exclusively through Phantom's native `signAndSendTransaction` / Wallet Standard `solana:signAndSendTransaction` (`sendTransaction`) with serialized transaction bytes strictly `<= LIGHTHOUSE_MAX_SAFE_TX_BYTES` (`1050` bytes), preserving ample headroom below Solana's 1232-byte MTU limit for Phantom / Blowfish Lighthouse guard instructions.
 
 ---
 
@@ -87,11 +88,11 @@ Both [`simulateVaultSweepTransactions`](src/lib/solana/tx-builder/vault-sweep.ts
 │   │   └── solana/
 │   │       ├── constants.ts               # Program IDs, BigInt rent/fee constants, env parsers
 │   │       └── tx-builder/
-│   │           ├── vault-sweep.ts         # Batched CloseAccount, Dust Guard & 90/10 fee split
+│   │           ├── vault-sweep.ts         # Batched CloseAccount, Dust Guard, 90/10 split & signAndSend
 │   │           ├── wallet-guard.ts        # Batched SPL Token delegate revoke builder (0% fee)
 │   │           └── pass-payment.ts        # Solana Pay reference checkout builder
 │   └── __tests__/
-│       └── vault-sweep.test.ts            # 8 Vitest security & invariant tests
+│       └── vault-sweep.test.ts            # 9 Vitest security, Lighthouse headroom & invariant tests
 ├── .env.example                           # Sanitized configuration schema (no secrets)
 ├── package.json
 ├── SECURITY.md                            # Formal wallet security review specification

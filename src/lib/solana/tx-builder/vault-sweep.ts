@@ -2,6 +2,7 @@ import {
   ComputeBudgetProgram,
   type Connection,
   PublicKey,
+  type SendOptions,
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
@@ -537,4 +538,115 @@ export async function simulateVaultSweepTransactions(
   return {
     success: true,
   };
+}
+
+// ============================================================================
+// BLOWFISH / PHANTOM LIGHTHOUSE-COMPATIBLE SIGN & SEND HELPER
+// ============================================================================
+
+/**
+ * Maximum safe unsigned serialized transaction size (in bytes) before Phantom's
+ * Lighthouse guard instructions are injected (1232-byte Solana MTU minus >=182B headroom).
+ */
+export const LIGHTHOUSE_MAX_SAFE_TX_BYTES = 1050;
+
+export type SendTransactionFn = (
+  transaction: Transaction,
+  connection: Connection,
+  options?: SendOptions
+) => Promise<string>;
+
+export type SignTransactionFn = (transaction: Transaction) => Promise<Transaction>;
+
+export interface PhantomProviderLike {
+  isPhantom?: boolean;
+  publicKey?: { toBase58(): string } | null;
+  signAndSendTransaction?: (
+    transaction: Transaction,
+    options?: SendOptions
+  ) => Promise<{ signature: string }>;
+}
+
+export interface SignAndSendUnsignedParams {
+  transaction: Transaction;
+  connection: Connection;
+  userPublicKey: PublicKey | string;
+  recentBlockhash?: string;
+  sendTransaction?: SendTransactionFn;
+  signTransaction?: SignTransactionFn;
+  walletName?: string | null;
+  phantomProvider?: PhantomProviderLike | null;
+}
+
+function resolvePhantomProvider(
+  explicitProvider: PhantomProviderLike | null | undefined,
+  walletName?: string | null
+): PhantomProviderLike | null {
+  if (explicitProvider !== undefined) {
+    return explicitProvider;
+  }
+  if (walletName && !walletName.toLowerCase().includes("phantom")) {
+    return null;
+  }
+  const win = globalThis as unknown as {
+    phantom?: { solana?: PhantomProviderLike };
+  };
+  return win.phantom?.solana ?? null;
+}
+
+/**
+ * Submits an unsigned Transaction via `signAndSendTransaction` so Phantom / Blowfish
+ * can inject Lighthouse guard instructions cleanly without triggering untrusted-dApp warnings.
+ *
+ * Strips any placeholder signature slots created during pre-flight simulation (`signatures = []`),
+ * prioritizes Phantom's native `signAndSendTransaction`, then Wallet Adapter's `sendTransaction`
+ * (`solana:signAndSendTransaction`), and falls back to `signTransaction` + `sendRawTransaction`
+ * only for legacy wallets that lack `sendTransaction`.
+ */
+export async function signAndSendUnsignedTransaction(
+  params: SignAndSendUnsignedParams
+): Promise<string> {
+  const { transaction, connection, sendTransaction, signTransaction } = params;
+  const userPubkey = toPublicKey(params.userPublicKey, "userPublicKey");
+
+  transaction.feePayer = userPubkey;
+  if (params.recentBlockhash) {
+    transaction.recentBlockhash = params.recentBlockhash;
+  }
+  // Ensure the transaction is strictly unsigned so Phantom can append Lighthouse guards
+  transaction.signatures = [];
+
+  const sendOptions: SendOptions = {
+    skipPreflight: false,
+    preflightCommitment: "confirmed",
+  };
+
+  const phantomProvider = resolvePhantomProvider(
+    params.phantomProvider,
+    params.walletName
+  );
+  if (
+    phantomProvider?.isPhantom &&
+    typeof phantomProvider.signAndSendTransaction === "function" &&
+    phantomProvider.publicKey?.toBase58() === userPubkey.toBase58()
+  ) {
+    const { signature } = await phantomProvider.signAndSendTransaction(
+      transaction,
+      sendOptions
+    );
+    return signature;
+  }
+
+  if (sendTransaction) {
+    return await sendTransaction(transaction, connection, sendOptions);
+  }
+
+  if (signTransaction) {
+    const signedTx = await signTransaction(transaction);
+    return await connection.sendRawTransaction(signedTx.serialize(), sendOptions);
+  }
+
+  throw new Error(
+    "This wallet can't sign and send transactions. Try Phantom, Solflare or Backpack."
+  );
 }

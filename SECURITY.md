@@ -113,11 +113,12 @@ flowchart TD
 
 ---
 
-## 3. Mandatory Pre-Flight Simulation
+## 3. Mandatory Pre-Flight Simulation & Unsigned `signAndSendTransaction`
 
-Before any wallet extension (`Phantom`, `Solflare`, etc.) is asked to sign a transaction:
+Before any wallet extension (`Phantom`, `Solflare`, etc.) is asked to approve a transaction:
 1. Client executes `await connection.simulateTransaction(tx)` via [`simulateVaultSweepTransactions`](src/lib/solana/tx-builder/vault-sweep.ts) or [`simulateWalletGuardTransactions`](src/lib/solana/tx-builder/wallet-guard.ts).
-2. If `simulation.value.err !== null`, execution aborts immediately and surfaces a structured error (`failedBatchIndex`, `error`, `logs`) without invoking `wallet.signTransaction` or `wallet.signAllTransactions`.
+2. If `simulation.value.err !== null`, execution aborts immediately and surfaces a structured error (`failedBatchIndex`, `error`, `logs`) without prompting the wallet.
+3. Passing transactions are submitted via [`signAndSendUnsignedTransaction`](src/lib/solana/tx-builder/vault-sweep.ts), which resets `tx.signatures = []` and routes the unsigned `Transaction` through `signAndSendTransaction` (`window.phantom.solana.signAndSendTransaction` or Wallet Standard `solana:signAndSendTransaction` via `sendTransaction`). Because each batch caps at `MAX_ACCOUNTS_PER_TX = 15` (`<= LIGHTHOUSE_MAX_SAFE_TX_BYTES = 1050` bytes), Phantom / Blowfish Lighthouse guard instructions fit cleanly inside the 1232-byte Solana packet limit.
 
 ---
 
@@ -133,6 +134,7 @@ All safety invariants above are covered by automated Vitest assertions in [`src/
 6. **NFT & Valuable Asset Protection Test:** `decimals === 0`, `verifiedUsdValue >= 0.05`, and `verifiedUsdValue === null` throw `UnsafeBurnError`.
 7. **Pre-Flight Simulation Guard Test:** Non-null simulation errors abort immediately.
 8. **WalletGuard Revoke Builder Test:** Batches up to 15 accounts and skips frozen or non-delegated accounts.
+9. **Lighthouse Guard Headroom & Unsigned `signAndSendTransaction` Test:** Verifies a full 15-account batch serializes `<= 1050` bytes (`LIGHTHOUSE_MAX_SAFE_TX_BYTES`) and `signAndSendUnsignedTransaction` clears signature slots before calling `signAndSendTransaction`.
 
 ---
 
