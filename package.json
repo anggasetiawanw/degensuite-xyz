@@ -1,0 +1,25 @@
+{
+  "name": "degensuite-xyz",
+  "version": "1.0.0",
+  "description": "DegenSuite non-custodial Solana transaction builders, security architecture, and verification test suite.",
+  "homepage": "https://degensuite.xyz",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anggasetiawanw/degensuite-xyz.git"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.95.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
